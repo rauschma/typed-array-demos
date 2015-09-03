@@ -1,0 +1,160 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>JPEG decoder</title>
+</head>
+<body>
+    <h1>JPEG decoder</h1>
+    <div>
+        Select a JPEG file:
+        <input type="file" id="fileInput">
+    </div>
+    <pre id="outputElement"></pre>
+
+    <script>
+    (function() {
+        // JPEG is big endian
+        var IS_LITTLE_ENDIAN = false;
+
+        var markerToDesc = {
+            'FFD8': { name: 'SOI',  len:  0 },
+            'FFC0': { name: 'SOF0', len: -1 },
+            'FFC2': { name: 'SOF2', len: -1 },
+            'FFC4': { name: 'DHT',  len: -1 },
+            'FFDB': { name: 'DQT',  len: -1 },
+            'FFDD': { name: 'DRI',  len: -1 },
+            'FFDA': { name: 'SOS',  len: -1, entropyEncoded: true },
+            'FFEE': { name: 'COM',  len: -1 },
+            'FFD9': { name: 'EOI',  len: 0 },
+
+            'FFE0': { name: 'APP0', len: -1 },
+            'FFE1': { name: 'APP1', len: -1 },
+            'FFE2': { name: 'APP2', len: -1 },
+            'FFE3': { name: 'APP3', len: -1 },
+            'FFE4': { name: 'APP4', len: -1 },
+            'FFE5': { name: 'APP5', len: -1 },
+            'FFE6': { name: 'APP6', len: -1 },
+            'FFE7': { name: 'APP7', len: -1 },
+            'FFE8': { name: 'APP8', len: -1 },
+            'FFE9': { name: 'APP9', len: -1 },
+            'FFEA': { name: 'APPA', len: -1 },
+            'FFEB': { name: 'APPB', len: -1 },
+            'FFEC': { name: 'APPC', len: -1 },
+            'FFED': { name: 'APPD', len: -1 },
+            'FFEE': { name: 'APPE', len: -1 },
+            'FFEF': { name: 'APPF', len: -1 },
+
+            'FFD0': { name: 'RST0', len:  0 },
+            'FFD1': { name: 'RST1', len:  0 },
+            'FFD2': { name: 'RST2', len:  0 },
+            'FFD3': { name: 'RST3', len:  0 },
+            'FFD4': { name: 'RST4', len:  0 },
+            'FFD5': { name: 'RST5', len:  0 },
+            'FFD6': { name: 'RST6', len:  0 },
+            'FFD7': { name: 'RST7', len:  0 },
+        };
+
+        var fileInput = document.getElementById('fileInput');
+        var outputElement = document.getElementById('outputElement');
+
+        fileInput.addEventListener('change', function(e) {
+            clearLog();
+            var file = fileInput.files[0];
+
+            if (file.type === 'image/jpeg') {
+                var reader = new FileReader();
+                reader.readAsArrayBuffer(file);
+                reader.onload = function () {
+                    processArrayBuffer(reader.result);
+                };
+            } else {
+                outputElement.textContent = "File not supported!"
+            }
+        });
+        function processArrayBuffer(arrayBuffer) {
+            try {
+                var dv = new DataView(arrayBuffer);
+                var ptr = 0;
+                while (true) {
+                    if (ptr >= dv.byteLength) break;
+                    var lastPtr = ptr;
+                    var marker = dv.getUint16(ptr, IS_LITTLE_ENDIAN).toString(16).toUpperCase();
+                    var desc = markerToDesc[marker];
+                    if (!desc) {
+                        throw new Error('Unknown marker: '+marker);
+                    }
+                    ptr += 2; // after marker now
+                    var len = desc.len;
+                    if (len < 0) {
+                        len = dv.getUint16(ptr, IS_LITTLE_ENDIAN);
+                    }
+                    logInfo('Marker: '+desc.name+' ('+marker+'): '+len+' byte(s)');
+                    ptr += len;
+                    if (desc.entropyEncoded) {
+                        while (true) {
+                            if (ptr >= dv.byteLength) {
+                                throw new Error('Unexpected end of file');
+                            }
+                            if (dv.getUint8(ptr) === 0xFF) {
+                                if (dv.getUint8(ptr+1) !== 0x00) {
+                                    break;
+                                }
+                                ptr += 2;
+                            } else {
+                                ptr += 1;
+                            }
+                        }
+                    }
+                    if (desc.handler) {
+                        logInfo(desc.handler(dv, lastPtr, ptr));
+                    }
+                }
+            } catch (e) {
+                logError(e.message);
+            }
+        }
+        function logError(str) {
+            logInfo('ERROR: '+str);
+        }
+        function clearLog() {
+            outputElement.innerHTML = '';
+        }
+        function logInfo(str) {
+            var textNode = document.createTextNode(str+'\n');
+            outputElement.appendChild(textNode);
+        }
+
+        //--------------------- Useful for experiments and debugging
+
+        function hex(number) {
+            if (number === undefined) {
+                return '--';
+            }
+            var hexStr = number.toString(16).toUpperCase();
+            if (hexStr.length < 2) {
+                hexStr = '0'+hexStr;
+            }
+            return hexStr;
+        }
+        function decodeSOF0(dv, start, end) {
+            // Example (16x16): FF C0 00 11 08 00 10 00 10 03 01 22 00 02 11 01 03 11 01
+            var data = {};
+            start += 4; // skip marker and segment length
+            data.bitsPerColorComponent = dv.getUint8(start);
+            data.imageHeight = dv.getUint16(start+1, IS_LITTLE_ENDIAN);
+            data.imageWidth = dv.getUint16(start+3, IS_LITTLE_ENDIAN);
+            data.numberOfColorComponents = dv.getUint8(start+5);
+            return JSON.stringify(data, null, 4)+'\n';
+        }
+        function showHexDump(dv, start, end) {
+            var text = '';
+            for (var i=start; i<end; i++) {
+                text += hex(dv.getUint8(i))+' ';
+            }
+            return text+'\n';
+        }
+    }());
+    </script>
+</body>
+</html>

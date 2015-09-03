@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Decode JPEG SOF0</title>
+</head>
+<body>
+    <h1>Decode JPEG SOF0</h1>
+    <div>
+        Select a JPEG file:
+        <input type="file" id="fileInput">
+    </div>
+    <pre id="outputElement"></pre>
+
+    <script>
+    (function() {
+        // JPEG is big endian
+        var IS_LITTLE_ENDIAN = false;
+
+        var fileInput = document.getElementById('fileInput');
+        var outputElement = document.getElementById('outputElement');
+
+        fileInput.addEventListener('change', function (e) {
+            clearLog();
+            var file = fileInput.files[0];
+
+            if (file.type === 'image/jpeg') {
+                var reader = new FileReader();
+                reader.readAsArrayBuffer(file);
+                reader.onload = function () {
+                    processArrayBuffer(reader.result);
+                };
+            } else {
+                logError('File not supported!');
+            }
+        });
+        function processArrayBuffer(arrayBuffer) {
+            try {
+                var dv = new DataView(arrayBuffer);
+                enforceValue(0xFFD8, dv.getUint16(0, IS_LITTLE_ENDIAN),
+                    'No SOI at the beginning of the file.');
+                var ptr = 2;
+                while (true) {
+                    if (ptr >= dv.byteLength) {
+                        throw new Error('Unexpected end of file');
+                    }
+                    var lastPtr = ptr;
+                    enforceValue(0xFF, dv.getUint8(ptr),
+                        'Not a marker.');
+                    ptr++;
+                    var marker = dv.getUint8(ptr);
+                    ptr++;
+                    var len = dv.getUint16(ptr, IS_LITTLE_ENDIAN);
+                    ptr += len;
+                    var plural = (len !== 1 ? 's' : '');
+                    logInfo('Marker: '+hex(marker)+' ('+len+' byte'+plural+')');
+
+                    if (marker === 0xDA) {
+                        throw new Error('Reached marker SOS (0xDA) before finding SOF0 (0xC0)');
+                    }
+
+                    // Did we find what we were looking for?
+                    if (marker === 0xC0) { // SOF0
+                        logInfo(decodeSOF0(dv, lastPtr));
+                        break;
+                    }
+                }
+            } catch (e) {
+                logError(e.message);
+            }
+        }
+        function decodeSOF0(dv, start) {
+            // Example (16x16):
+            // FF C0 00 11 08 00 10 00 10 03 01 22 00 02 11 01 03 11 01
+            var data = {};
+            start += 4; // skip marker 0xFFC0 and segment length 0x0011
+            var data = {
+                bitsPerColorComponent: dv.getUint8(start), // usually 0x08
+                imageHeight: dv.getUint16(start+1, IS_LITTLE_ENDIAN),
+                imageWidth: dv.getUint16(start+3, IS_LITTLE_ENDIAN),
+                numberOfColorComponents: dv.getUint8(start+5),
+            };
+            return JSON.stringify(data, null, 4);
+        }
+        function logError(str) {
+            logInfo('ERROR: '+str);
+        }
+        function clearLog() {
+            outputElement.innerHTML = '';
+        }
+        function logInfo(str) {
+            var textNode = document.createTextNode(str+'\n');
+            outputElement.appendChild(textNode);
+        }
+        function hex(number) {
+            if (number === undefined) {
+                return '--';
+            }
+            var hexStr = number.toString(16).toUpperCase();
+            if (hexStr.length < 2) {
+                hexStr = '0'+hexStr;
+            }
+            return hexStr;
+        }
+        function enforceValue(expected, actual, message) {
+            if (expected !== actual) {
+                throw new Error(message);
+            }
+        }
+    }());
+    </script>
+</body>
+</html>
